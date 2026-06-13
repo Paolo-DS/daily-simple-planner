@@ -1,0 +1,22 @@
+{
+  "name": "Daily Simple Planner",
+  "short_name": "Planner",
+  "description": "Pianifica le abitudini, organizza task e appuntamenti, tieni il diario quotidiano e guadagna ricompense.",
+  "lang": "it",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "./?dailysimpleplanner",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#161029",
+  "theme_color": "#1b1430",
+  "categories": ["productivity", "lifestyle", "health"],
+  "icons": [
+    { "src": "./icon-96.png",  "sizes": "96x96",   "type": "image/png", "purpose": "any" },
+    { "src": "./icon-144.png", "sizes": "144x144", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
