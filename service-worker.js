@@ -1,7 +1,7 @@
 /* Daily Simple Planner — service worker
    Strategia: cache-first per il guscio dell'app, con aggiornamento in background.
    Cambia CACHE ad ogni nuova versione per forzare l'aggiornamento. */
-const CACHE = "dsp-v1";
+const CACHE = "dsp-v2";
 const ASSETS = [
   "./",
   "./index.html",

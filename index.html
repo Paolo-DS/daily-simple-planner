@@ -134,6 +134,8 @@ h1,h2,h3{margin:0;font-family:'Fraunces',serif;font-weight:500;letter-spacing:-.
   cursor:pointer;transition:.3s var(--ease);color:transparent;font-size:15px}
 .habit.done .check{background:var(--sage);border-color:var(--sage);color:#11271c;transform:scale(1.05)}
 .check.pop{animation:pop .45s var(--ease)}
+.check.multi{width:auto;min-width:44px;height:30px;border-radius:16px;padding:0 6px;font-size:12.5px;font-weight:700;color:var(--muted)}
+.check.multi.partial{border-color:var(--gold);color:var(--gold)}
 @keyframes pop{0%{transform:scale(1)}40%{transform:scale(1.35)}100%{transform:scale(1.05)}}
 
 /* ---------- Tasks ---------- */
@@ -252,11 +254,12 @@ textarea.field:focus,input.field:focus{border-color:var(--plum)}
   transform:translateY(110%);transition:transform .42s var(--ease);max-height:90vh;overflow-y:auto;
   padding:8px 20px calc(28px + var(--safe-b))}
 .sheet.open{transform:translateY(0)}
-.sheet-grip{width:42px;height:5px;border-radius:3px;background:var(--line);margin:8px auto 14px}
-.sheet-close{position:absolute;top:14px;right:16px;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
-  background:var(--surface2);color:var(--muted);font-size:18px;cursor:pointer;display:grid;place-items:center;z-index:2;line-height:1}
-.sheet-close:active{transform:scale(.9)}
-.sheet h2{font-size:22px;margin-bottom:4px;padding-right:40px}
+.sheet.dragging{transition:none}
+.sheet-handle{margin:0 -20px;padding:10px 0 14px;display:flex;justify-content:center;cursor:grab;touch-action:none}
+.sheet-handle:active{cursor:grabbing}
+.sheet-grip{width:46px;height:5px;border-radius:3px;background:var(--line);transition:background .2s,width .2s}
+.sheet-handle:active .sheet-grip{background:var(--muted);width:60px}
+.sheet h2{font-size:22px;margin-bottom:4px}
 .day-section{margin-top:18px}
 .day-section .eyebrow{margin-bottom:10px;display:block}
 .appt{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:13px;background:var(--surface);border:1px solid var(--line);margin-bottom:9px}
@@ -279,6 +282,7 @@ textarea.field:focus,input.field:focus{border-color:var(--plum)}
 .day-mini-habit .dm-n{flex:1;font-size:13.5px}
 .day-mini-habit.done .dm-n{color:var(--muted);text-decoration:line-through}
 .day-mini-habit .dm-c{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;color:transparent;font-size:13px;cursor:pointer;transition:.2s}
+.day-mini-habit .dm-c.multi{width:auto;min-width:34px;border-radius:13px;padding:0 7px;font-size:11px;font-weight:700;color:var(--muted)}
 .day-mini-habit.done .dm-c{background:var(--sage);border-color:var(--sage);color:#11271c}
 .diary-preview{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px}
 .diary-preview .dp-mood{font-size:26px}
@@ -471,7 +475,7 @@ const defaultState = ()=>({
     {id:uid(),name:"Meditazione",emoji:"🧘",color:"plum",freq:{type:"daily"},xp:15,gems:5,created:todayKey()},
     {id:uid(),name:"Integratori",emoji:"💊",color:"rose",freq:{type:"daily"},xp:5,gems:2,created:todayKey()},
   ],
-  completions:{},            // "habitId|YYYY-MM-DD": true
+  completions:{},            // "habitId|YYYY-MM-DD": numero di volte completata quel giorno
   tasks:[],                  // {id,text,done,created}
   journal:{},                // "YYYY-MM-DD": {mood,recap,gratitude:[5],goal}
   rewards:[
@@ -496,6 +500,11 @@ function load(){
   try{const raw=localStorage.getItem(STORE_KEY);if(raw){const p=JSON.parse(raw);const st=Object.assign(defaultState(),p);
     // migrazione: i task ora hanno data e tipo
     (st.tasks||[]).forEach(t=>{if(!t.date)t.date=todayKey();if(!t.kind)t.kind="task";});
+    // migrazione: ogni abitudine ha un target giornaliero (volte al giorno)
+    (st.habits||[]).forEach(h=>{if(!h.target||h.target<1)h.target=1;});
+    // migrazione: i completamenti ora sono contatori numerici, non booleani
+    const comp=st.completions||{};
+    Object.keys(comp).forEach(key=>{const v=comp[key];const n=v===true?1:(+v||0);if(n>0)comp[key]=n;else delete comp[key];});
     return st;}}
   catch(e){console.warn("load fail",e);}
   return defaultState();
@@ -523,7 +532,8 @@ function isScheduled(h,dateKeyStr){
   if(h.freq.type==="days")return h.freq.days&&h.freq.days.includes(isoDow(d));
   return true;
 }
-function isDone(h,k){return !!S.completions[h.id+"|"+k];}
+function doneCount(h,k){const v=S.completions[h.id+"|"+k];return v===true?1:(+v||0);}
+function isDone(h,k){return doneCount(h,k) >= (h.target||1);}
 function streak(h){
   let n=0; let d=new Date();
   // se oggi non è ancora fatto, parti da ieri per non azzerare lo streak
@@ -544,19 +554,27 @@ function weekCount(h,ref=new Date()){
   return c;
 }
 function toggleHabit(h,k,el){
-  const key=h.id+"|"+k; const was=!!S.completions[key];
-  if(was){delete S.completions[key];revokeHabit(h);}
-  else{
-    S.completions[key]=true;awardHabit(h);
+  const key=h.id+"|"+k;
+  const target=h.target||1;
+  const prev=doneCount(h,k);
+  const wasDone=prev>=target;
+  const next=wasDone?0:prev+1;        // se già completata, un tap la azzera; altrimenti +1
+  const nowDone=next>=target;
+  if(next<=0)delete S.completions[key];else S.completions[key]=next;
+  let delta=0;                        // variazione XP (solo all'attraversare la soglia)
+  if(nowDone&&!wasDone){
+    delta=h.xp;awardHabit(h);
     if(el){const c=el.querySelector(".check");if(c){c.classList.remove("pop");void c.offsetWidth;c.classList.add("pop");}}
     const st=streak(h);
     if(st>0&&st%7===0) toast("🔥",`Streak di ${st} giorni su "${h.name}"!`);
+  }else if(wasDone&&!nowDone){
+    delta=-h.xp;revokeHabit(h);
   }
-  const before=levelInfo(was?S.player.xp+h.xp:S.player.xp-h.xp).level;
+  const before=levelInfo(S.player.xp-delta).level;
   const after=levelInfo(S.player.xp).level;
   save();checkAchievements();
   renderAll();
-  if(!was&&after>before){levelUp(after);}
+  if(delta>0&&after>before){levelUp(after);}
 }
 function levelUp(lvl){confetti();toast("✨",`Livello ${lvl} raggiunto!`);}
 
@@ -627,22 +645,27 @@ function renderPlayer(){
 }
 
 function habitRowHTML(h,k){
-  const done=isDone(h,k);
+  const target=h.target||1;
+  const count=doneCount(h,k);
+  const done=count>=target;
+  const multi=target>1;
   const st=streak(h);
   let freqLabel="Ogni giorno";
   if(h.freq.type==="week")freqLabel=`${weekCount(h)}/${h.freq.times} questa sett.`;
   if(h.freq.type==="days")freqLabel=h.freq.days.map(d=>DOW[d]).join(" ");
+  const checkInner=done?"✓":(multi?`${count}/${target}`:"✓");
+  const checkClass="check"+(multi?" multi":"")+(multi&&count>0&&!done?" partial":"");
   return `<div class="habit ${done?"done":""}" data-id="${h.id}">
     <div class="h-emoji" style="${done?"":""}">${h.emoji}</div>
     <div class="h-body">
       <div class="h-name">${esc(h.name)}</div>
       <div class="h-meta">
-        <span>${freqLabel}</span>
+        <span>${freqLabel}${multi?` · ${target}×/giorno`:""}</span>
         ${st>0?`<span class="h-streak">🔥 ${st}</span>`:""}
         <span class="h-reward">+${h.xp} XP · +${h.gems}💎</span>
       </div>
     </div>
-    <div class="check" data-check>✓</div>
+    <div class="${checkClass}" data-check>${checkInner}</div>
   </div>`;
 }
 function renderTodayHabits(){
@@ -693,6 +716,7 @@ function renderAllHabits(){
     let freqLabel="Ogni giorno";
     if(h.freq.type==="week")freqLabel=`${h.freq.times}× a settimana`;
     if(h.freq.type==="days")freqLabel=h.freq.days.map(d=>DOW[d]).join(" ");
+    if((h.target||1)>1)freqLabel+=` · ${h.target}×/giorno`;
     return `<div class="habit" data-edit="${h.id}" style="cursor:pointer">
       <div class="h-emoji">${h.emoji}</div>
       <div class="h-body">
@@ -931,16 +955,51 @@ function updateFab(){
    ============================================================ */
 const scrim=document.getElementById("scrim"),sheet=document.getElementById("sheet");
 function openSheet(html){
-  sheet.innerHTML=`<div class="sheet-grip"></div><button class="sheet-close" id="sheetClose" aria-label="Chiudi">✕</button>`+html;
-  document.getElementById("sheetClose").onclick=closeSheet;
+  sheet.innerHTML=`<div class="sheet-handle" id="sheetHandle"><div class="sheet-grip"></div></div>`+html;
   scrim.classList.add("open");sheet.classList.add("open");
+  sheet.scrollTop=0;
+  initSheetDrag();
 }
-function closeSheet(){scrim.classList.remove("open");sheet.classList.remove("open");}
+function closeSheet(){
+  sheet.style.transform="";scrim.style.opacity="";
+  scrim.classList.remove("open");sheet.classList.remove("open");
+}
+function initSheetDrag(){
+  const handle=document.getElementById("sheetHandle");
+  if(!handle)return;
+  let startY=0,dy=0,dragging=false,t0=0;
+  const down=e=>{
+    dragging=true;dy=0;t0=Date.now();
+    startY=e.touches?e.touches[0].clientY:e.clientY;
+    sheet.classList.add("dragging");
+    if(e.pointerId!=null&&handle.setPointerCapture){try{handle.setPointerCapture(e.pointerId);}catch(_){}}
+  };
+  const move=e=>{
+    if(!dragging)return;
+    const y=e.touches?e.touches[0].clientY:e.clientY;
+    dy=Math.max(0,y-startY);
+    sheet.style.transform=`translateY(${dy}px)`;
+    scrim.style.opacity=String(Math.max(0,1-dy/650));
+    if(e.cancelable)e.preventDefault();
+  };
+  const up=()=>{
+    if(!dragging)return;dragging=false;
+    sheet.classList.remove("dragging");
+    const fast=dy>50&&(Date.now()-t0)<300;     // scatto rapido verso il basso
+    if(dy>120||fast){closeSheet();}
+    else{sheet.style.transform="";scrim.style.opacity="";}
+  };
+  handle.addEventListener("pointerdown",down);
+  handle.addEventListener("pointermove",move);
+  handle.addEventListener("pointerup",up);
+  handle.addEventListener("pointercancel",up);
+}
 scrim.addEventListener("click",closeSheet);
 
 let draft={};
 function habitSheet(existing){
-  draft=existing?JSON.parse(JSON.stringify(existing)):{emoji:"⭐",color:"plum",freq:{type:"daily"},xp:10,gems:3,name:""};
+  draft=existing?JSON.parse(JSON.stringify(existing)):{emoji:"⭐",color:"plum",freq:{type:"daily"},xp:10,gems:3,name:"",target:1};
+  if(!draft.target||draft.target<1)draft.target=1;
   const emojis=["💧","🦷","🏋️","🧘","💊","📚","🏃","🥗","😴","☀️","🎨","🎸","🧹","💻","🚭","🙏","✍️","🌱","🚶","💪","🧴","🎯"];
   const html=`
     <h2>${existing?"Modifica abitudine":"Nuova abitudine"}</h2>
@@ -958,6 +1017,9 @@ function habitSheet(existing){
       <button data-f="days" class="${draft.freq.type==="days"?"sel":""}">Giorni scelti</button>
     </div>
     <div id="freqExtra"></div>
+    <label class="field-label">Volte al giorno</label>
+    <div class="stepper"><button data-tgt="-1">−</button><b id="tgtVal">${draft.target}</b><button data-tgt="1">＋</button>
+      <span style="font-size:12px;color:var(--muted);margin-left:8px">tocca la spunta una volta per ogni completamento</span></div>
     <label class="field-label">Ricompensa al completamento</label>
     <div style="display:flex;gap:20px">
       <div><div style="font-size:11px;color:var(--muted);margin-bottom:6px">XP (livello)</div>
@@ -980,6 +1042,7 @@ function habitSheet(existing){
     if(b.dataset.f==="days"&&!draft.freq.days)draft.freq.days=[0,2,4];
     document.querySelectorAll("#hFreq button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");renderFreqExtra();};
   sheet.querySelectorAll("[data-xp]").forEach(b=>b.onclick=()=>{draft.xp=Math.max(1,draft.xp+(+b.dataset.xp));document.getElementById("xpVal").textContent=draft.xp;});
+  sheet.querySelectorAll("[data-tgt]").forEach(b=>b.onclick=()=>{draft.target=Math.max(1,Math.min(20,(draft.target||1)+(+b.dataset.tgt)));document.getElementById("tgtVal").textContent=draft.target;});
   sheet.querySelectorAll("[data-gem]").forEach(b=>b.onclick=()=>{draft.gems=Math.max(0,draft.gems+(+b.dataset.gem));document.getElementById("gemVal").textContent=draft.gems;});
   document.getElementById("hSave").onclick=()=>{
     draft.name=document.getElementById("hName").value.trim();
@@ -1055,10 +1118,14 @@ function daySheet(dateKey){
 
   // abitudini programmate quel giorno
   const habits=S.habits.filter(h=>isScheduled(h,dateKey));
-  const habitsHTML=habits.length?habits.map(h=>`
-    <div class="day-mini-habit ${isDone(h,dateKey)?"done":""}" data-dhabit="${h.id}">
-      <span class="dm-e">${h.emoji}</span><span class="dm-n">${esc(h.name)}</span>
-      <span class="dm-c">✓</span></div>`).join(""):`<p style="color:var(--muted2);font-size:13px;margin:0">Nessuna abitudine in programma.</p>`;
+  const habitsHTML=habits.length?habits.map(h=>{
+    const tg=h.target||1;const ct=doneCount(h,dateKey);const dn=ct>=tg;
+    const inner=dn?"✓":(tg>1?`${ct}/${tg}`:"✓");
+    const cls="dm-c"+(tg>1?" multi":"");
+    return `<div class="day-mini-habit ${dn?"done":""}" data-dhabit="${h.id}">
+      <span class="dm-e">${h.emoji}</span><span class="dm-n">${esc(h.name)}${tg>1?` <span style="color:var(--muted2);font-size:11px">${tg}×/g</span>`:""}</span>
+      <span class="${cls}">${inner}</span></div>`;
+  }).join(""):`<p style="color:var(--muted2);font-size:13px;margin:0">Nessuna abitudine in programma.</p>`;
 
   // task e appuntamenti
   const items=tasksFor(dateKey);
