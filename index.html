@@ -447,6 +447,7 @@ textarea.field:focus,input.field:focus{border-color:var(--plum)}
    ============================================================ */
 
 const STORE_KEY = "rituale_v1";
+const APP_VERSION = "1.1.0";   // bumpa a ogni release con novità da mostrare
 const COLORS = {plum:"#c89bf0",gold:"#f6b65c",sage:"#7fd9a6",rose:"#f08fb0",sky:"#86b8f0"};
 const DOW = ["Lun","Mar","Mer","Gio","Ven","Sab","Dom"];
 const MOODS = [
@@ -487,6 +488,7 @@ const defaultState = ()=>({
   player:{xp:0,gems:0},
   achievements:{},           // id: dateKey
   theme:"dark",
+  version:APP_VERSION,       // versione vista dall'utente (per le novità)
 });
 
 let S = load();
@@ -505,6 +507,8 @@ function load(){
     // migrazione: i completamenti ora sono contatori numerici, non booleani
     const comp=st.completions||{};
     Object.keys(comp).forEach(key=>{const v=comp[key];const n=v===true?1:(+v||0);if(n>0)comp[key]=n;else delete comp[key];});
+    // utente già esistente (stato salvato senza "version"): forzane una vecchia così vede le novità
+    if(!("version" in p))st.version="0";
     return st;}}
   catch(e){console.warn("load fail",e);}
   return defaultState();
@@ -1327,6 +1331,36 @@ document.getElementById("journalBody").addEventListener("click",e=>{
   if(e.target.id==="jToday"){journalDate=todayKey();renderJournal();return;}
 });
 
+/* ---------- Novità / changelog ---------- */
+const CHANGELOG = [
+  {v:"1.1.0", title:"Novità di questa versione", items:[
+    {e:"🔢", t:"Contatore giornaliero", d:"Ora puoi spuntare un'abitudine più volte al giorno (es. lavarsi i denti). Imposta «Volte al giorno» quando crei o modifichi un'abitudine."},
+    {e:"↕️", t:"Chiusura con swipe", d:"Trascina verso il basso la maniglia in cima a una finestra per chiuderla; il pulsante ✕ non c'è più."},
+  ]},
+];
+function showWhatsNew(entry){
+  const items=entry.items.map(i=>`
+    <div style="display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:22px;line-height:1.1;flex:0 0 auto">${i.e}</div>
+      <div><div style="font-weight:600;font-size:14.5px;margin-bottom:3px">${i.t}</div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.5">${i.d}</div></div>
+    </div>`).join("");
+  openSheet(`
+    <span class="eyebrow" style="color:var(--gold)">Aggiornamento · v${entry.v}</span>
+    <h2 style="margin-top:6px">${entry.title}</h2>
+    <p class="sub">Ecco cosa è cambiato nell'app.</p>
+    <div class="card" style="margin:0;padding:2px 16px">${items}</div>
+    <button class="btn btn-primary btn-block" id="wnOk" style="margin-top:22px">Ho capito</button>
+  `);
+  document.getElementById("wnOk").onclick=closeSheet;
+}
+function maybeShowWhatsNew(){
+  if(S.version===APP_VERSION)return;          // già aggiornato (o nuova installazione)
+  const entry=CHANGELOG.find(c=>c.v===APP_VERSION);
+  S.version=APP_VERSION;save();               // segna come visto, una sola volta
+  if(entry)setTimeout(()=>showWhatsNew(entry),700);
+}
+
 /* ============================================================
    INIT
    ============================================================ */
@@ -1334,6 +1368,7 @@ buildTabs();
 applyTheme();
 checkAchievements();
 renderAll();
+maybeShowWhatsNew();
 // aggiorna l'intestazione data a mezzanotte / al ritorno sull'app
 document.addEventListener("visibilitychange",()=>{if(!document.hidden){renderTop();renderTodayHabits();}});
 
