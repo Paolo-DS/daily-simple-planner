@@ -447,7 +447,7 @@ textarea.field:focus,input.field:focus{border-color:var(--plum)}
    ============================================================ */
 
 const STORE_KEY = "rituale_v1";
-const APP_VERSION = "1.1.0";   // bumpa a ogni release con novità da mostrare
+const APP_VERSION = "1.2.0";   // bumpa a ogni release con novità da mostrare
 const COLORS = {plum:"#c89bf0",gold:"#f6b65c",sage:"#7fd9a6",rose:"#f08fb0",sky:"#86b8f0"};
 const DOW = ["Lun","Mar","Mer","Gio","Ven","Sab","Dom"];
 const MOODS = [
@@ -1220,6 +1220,10 @@ function settingsSheet(){
         <div><div class="sr-t">Ripristina</div><div class="sr-s">Carica un backup</div></div>
         <button class="btn btn-ghost" id="setImport" style="padding:8px 16px">Importa</button>
       </div>
+      <div class="settings-row">
+        <div><div class="sr-t">Calendario (.ics)</div><div class="sr-s">Abitudini e agenda per Google, Apple o Outlook</div></div>
+        <button class="btn btn-ghost" id="setIcs" style="padding:8px 16px">Esporta</button>
+      </div>
     </div>
     <input type="file" id="importFile" accept="application/json" style="display:none">
     <button class="btn btn-ghost btn-block" id="setReset" style="margin-top:16px;color:var(--rose)">Azzera tutti i dati</button>
@@ -1228,11 +1232,95 @@ function settingsSheet(){
   document.getElementById("setName").onchange=e=>{S.name=e.target.value.trim();save();renderTop();};
   document.getElementById("setTheme").onclick=()=>{S.theme=S.theme==="dark"?"light":"dark";applyTheme();save();settingsSheet();};
   document.getElementById("setExport").onclick=exportData;
+  document.getElementById("setIcs").onclick=exportICS;
   document.getElementById("setImport").onclick=()=>document.getElementById("importFile").click();
   document.getElementById("importFile").onchange=importData;
   document.getElementById("setReset").onclick=()=>{if(confirm("Sicuro? Verrà cancellato tutto: abitudini, diario, premi e progressi.")){localStorage.removeItem(STORE_KEY);S=defaultState();applyTheme();renderAll();closeSheet();toast("🔄","Tutto azzerato");}};
 }
 
+/* ---------- Esportazione calendario (.ics) ---------- */
+const BYDAY_MAP=["MO","TU","WE","TH","FR","SA","SU"]; // isoDow: Lun=0 ... Dom=6
+function icsEsc(s){return String(s==null?"":s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");}
+function icsFold(line){
+  if(line.length<=73)return line;
+  let out="",i=0;
+  while(line.length-i>73){
+    let cut=73;
+    const c=line.charCodeAt(i+cut-1);           // non spezzare una coppia surrogata (emoji)
+    if(c>=0xD800&&c<=0xDBFF)cut--;
+    out+=line.slice(i,i+cut)+"\r\n ";i+=cut;
+  }
+  return out+line.slice(i);
+}
+function icsDate(k){return k.replace(/-/g,"");}  // YYYY-MM-DD -> YYYYMMDD
+function icsDateTime(k,t){                       // ora locale "flottante": YYYYMMDDTHHMMSS
+  const hm=String(t||"00:00").split(":");
+  return icsDate(k)+"T"+String(hm[0]||"0").padStart(2,"0")+String(hm[1]||"0").padStart(2,"0")+"00";
+}
+function icsStamp(){
+  const d=new Date(),p=n=>String(n).padStart(2,"0");
+  return d.getUTCFullYear()+p(d.getUTCMonth()+1)+p(d.getUTCDate())+"T"+p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+"Z";
+}
+function firstMatchingDay(startKey,days){        // primo giorno >= startKey il cui isoDow è in days
+  let d=parseKey(startKey);
+  for(let i=0;i<7;i++){if(days.includes(isoDow(d)))return todayKey(d);d=addDays(d,1);}
+  return startKey;
+}
+function addMinToTime(t,min){
+  const [h,m]=String(t||"00:00").split(":").map(Number);
+  let tot=(((h*60+m+min)%1440)+1440)%1440;
+  return String(Math.floor(tot/60)).padStart(2,"0")+":"+String(tot%60).padStart(2,"0");
+}
+function buildICS(){
+  const stamp=icsStamp(),L=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Rituale//Daily Simple Planner//IT","CALSCALE:GREGORIAN","METHOD:PUBLISH","X-WR-CALNAME:Rituale"];
+  const push=line=>L.push(icsFold(line));
+  // Abitudini -> eventi ricorrenti "tutto il giorno"
+  (S.habits||[]).forEach(h=>{
+    const f=h.freq||{type:"daily"};
+    let startK=h.created||todayKey(),rrule="FREQ=DAILY",desc="Abitudine · Rituale";
+    if(f.type==="days"&&f.days&&f.days.length){
+      rrule="FREQ=WEEKLY;BYDAY="+f.days.slice().sort((a,b)=>a-b).map(d=>BYDAY_MAP[d]).join(",");
+      startK=firstMatchingDay(startK,f.days);
+    }else if(f.type==="week"){
+      rrule="FREQ=WEEKLY;BYDAY="+BYDAY_MAP[isoDow(parseKey(startK))];
+      if(f.times)desc="Obiettivo: "+f.times+" volte a settimana · Rituale";
+    }
+    const tgt=(h.target||1)>1?" (×"+h.target+"/giorno)":"";
+    L.push("BEGIN:VEVENT");
+    push("UID:habit-"+h.id+"@rituale");
+    push("DTSTAMP:"+stamp);
+    push("DTSTART;VALUE=DATE:"+icsDate(startK));
+    push("DTEND;VALUE=DATE:"+icsDate(todayKey(addDays(parseKey(startK),1))));
+    push("RRULE:"+rrule);
+    push("SUMMARY:"+icsEsc((h.emoji?h.emoji+" ":"")+(h.name||"Abitudine")+tgt));
+    push("DESCRIPTION:"+icsEsc(desc));
+    L.push("CATEGORIES:Abitudine","TRANSP:TRANSPARENT","END:VEVENT");
+  });
+  // Task e appuntamenti dell'agenda
+  (S.tasks||[]).forEach(t=>{
+    if(!t.date)return;
+    L.push("BEGIN:VEVENT");
+    push("UID:task-"+t.id+"@rituale");
+    push("DTSTAMP:"+stamp);
+    if(t.kind==="appt"&&t.time){
+      push("DTSTART:"+icsDateTime(t.date,t.time));
+      push("DTEND:"+icsDateTime(t.date,addMinToTime(t.time,30)));
+    }else{
+      push("DTSTART;VALUE=DATE:"+icsDate(t.date));
+      push("DTEND;VALUE=DATE:"+icsDate(todayKey(addDays(parseKey(t.date),1))));
+    }
+    push("SUMMARY:"+icsEsc((t.kind==="appt"?"":"📌 ")+(t.text||"(senza titolo)")));
+    L.push("CATEGORIES:"+(t.kind==="appt"?"Appuntamento":"Task"),"END:VEVENT");
+  });
+  L.push("END:VCALENDAR");
+  return L.join("\r\n");
+}
+function exportICS(){
+  const blob=new Blob([buildICS()],{type:"text/calendar;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download="rituale-agenda-"+todayKey()+".ics";a.click();URL.revokeObjectURL(a.href);
+  toast("📅","Calendario esportato");
+}
 function exportData(){
   const blob=new Blob([JSON.stringify(S,null,2)],{type:"application/json"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);
@@ -1273,6 +1361,30 @@ function applyTheme(){document.documentElement.setAttribute("data-theme",S.theme
    ============================================================ */
 // Tab nav
 document.getElementById("tabbar").addEventListener("click",e=>{const b=e.target.closest("[data-tab]");if(b)go(b.dataset.tab);});
+
+// Swipe orizzontale per cambiare scheda (sx = avanti, dx = indietro)
+(function initSwipeNav(){
+  const app=document.querySelector(".app");
+  let x0=0,y0=0,t0=0,tracking=false,guardUntil=0;
+  // dopo uno swipe riconosciuto, ignora il click sintetizzato sotto il dito
+  app.addEventListener("click",e=>{if(Date.now()<guardUntil){e.stopPropagation();e.preventDefault();}},true);
+  app.addEventListener("touchstart",e=>{
+    if(e.touches.length!==1||sheet.classList.contains("open")){tracking=false;return;}
+    const t=e.touches[0];x0=t.clientX;y0=t.clientY;t0=Date.now();tracking=true;
+  },{passive:true});
+  app.addEventListener("touchend",e=>{
+    if(!tracking)return;tracking=false;
+    if(sheet.classList.contains("open"))return;
+    const ct=e.changedTouches[0],dx=ct.clientX-x0,dy=ct.clientY-y0,dt=Date.now()-t0;
+    if(dt>600||Math.abs(dx)<60||Math.abs(dx)<Math.abs(dy)*1.8)return; // dev'essere chiaramente orizzontale
+    const idx=TABS.findIndex(tb=>tb.id===currentView);
+    if(idx<0)return;
+    const ni=dx<0?idx+1:idx-1;
+    if(ni<0||ni>=TABS.length)return;
+    guardUntil=Date.now()+400;
+    go(TABS[ni].id);
+  },{passive:true});
+})();
 
 // FAB contestuale
 document.getElementById("fab").addEventListener("click",()=>{
@@ -1333,6 +1445,10 @@ document.getElementById("journalBody").addEventListener("click",e=>{
 
 /* ---------- Novità / changelog ---------- */
 const CHANGELOG = [
+  {v:"1.2.0", title:"Novità di questa versione", items:[
+    {e:"📅", t:"Esporta nel calendario", d:"Da Impostazioni → «Calendario (.ics)» esporti abitudini, task e appuntamenti in un file da importare in Google Calendar, Apple o Outlook. Le abitudini diventano eventi ricorrenti."},
+    {e:"👆", t:"Cambia pagina con lo swipe", d:"Scorri orizzontalmente per passare da una scheda all'altra: verso sinistra vai avanti (Oggi → Abitudini), verso destra torni indietro."},
+  ]},
   {v:"1.1.0", title:"Novità di questa versione", items:[
     {e:"🔢", t:"Contatore giornaliero", d:"Ora puoi spuntare un'abitudine più volte al giorno (es. lavarsi i denti). Imposta «Volte al giorno» quando crei o modifichi un'abitudine."},
     {e:"↕️", t:"Chiusura con swipe", d:"Trascina verso il basso la maniglia in cima a una finestra per chiuderla; il pulsante ✕ non c'è più."},
