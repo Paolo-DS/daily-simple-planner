@@ -86,6 +86,8 @@ h1,h2,h3{margin:0;font-family:'Fraunces',serif;font-weight:500;letter-spacing:-.
 .view{display:none;padding:0 18px calc(var(--tab-h) + var(--safe-b) + 24px)}
 .view.active{display:block;animation:viewIn .45s var(--ease)}
 @keyframes viewIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.app.js-nav .view.active{animation:none}                                   /* lo slide sostituisce l'entrata */
+.view.anim-layer{position:absolute;top:0;left:0;width:100%;animation:none} /* due schede affiancate durante lo slide */
 
 /* ---------- Header ---------- */
 .top{display:flex;align-items:flex-end;justify-content:space-between;padding:18px 2px 14px}
@@ -932,15 +934,60 @@ function buildTabs(){
     `<button class="tab ${t.id==="oggi"?"active":""}" data-tab="${t.id}">
       <svg viewBox="0 0 24 24" fill="currentColor">${t.icon}</svg>${t.label}</button>`).join("");
 }
-function go(id){
+let currentView="oggi";
+let animating=false, animCleanup=null;
+function finishAnim(){ if(animCleanup){const fn=animCleanup; animCleanup=null; fn();} }
+function setActiveView(id){
   document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
   document.getElementById("view-"+id).classList.add("active");
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===id));
-  window.scrollTo(0,0);
   currentView=id;
   updateFab();
 }
-let currentView="oggi";
+function go(id){
+  finishAnim();                                  // chiudi un'eventuale animazione in corso
+  const prev=currentView;
+  if(prev===id){window.scrollTo(0,0);return;}
+  const i0=TABS.findIndex(t=>t.id===prev), i1=TABS.findIndex(t=>t.id===id);
+  const dir=(i0>=0&&i1>=0)?(i1>i0?1:-1):0;        // +1 = avanti (nuova da destra), -1 = indietro
+  const outEl=document.getElementById("view-"+prev), inEl=document.getElementById("view-"+id);
+  if(dir===0||!outEl||!inEl||outEl===inEl){setActiveView(id);window.scrollTo(0,0);return;}
+  slideViews(outEl,inEl,id,dir);
+}
+function slideViews(outEl,inEl,id,dir){
+  const app=document.querySelector(".app");
+  app.classList.add("js-nav");                   // disattiva l'entrata "viewIn": ora comanda lo slide
+  window.scrollTo(0,0);
+  animating=true;
+  // stato logico aggiornato subito (tab attivo, FAB, vista corrente)
+  inEl.classList.add("active","anim-layer");
+  outEl.classList.add("anim-layer");             // resta visibile durante lo slide
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===id));
+  currentView=id; updateFab();
+  // posizione di partenza (istantanea, nessuna transizione ancora)
+  inEl.style.transform="translateX("+(dir*100)+"%)";
+  outEl.style.transform="translateX(0)";
+  void inEl.offsetWidth;                          // forza il reflow
+  const DUR=300;
+  inEl.style.transition="transform "+DUR+"ms var(--ease)";
+  outEl.style.transition="transform "+DUR+"ms var(--ease)";
+  requestAnimationFrame(()=>{
+    inEl.style.transform="translateX(0)";
+    outEl.style.transform="translateX("+(-dir*100)+"%)";
+  });
+  let done=false;
+  const cleanup=()=>{
+    if(done)return; done=true;
+    inEl.removeEventListener("transitionend",onEnd);
+    [outEl,inEl].forEach(el=>{el.classList.remove("anim-layer");el.style.transform="";el.style.transition="";});
+    outEl.classList.remove("active");
+    animating=false; animCleanup=null;
+  };
+  const onEnd=e=>{ if(e.target===inEl&&e.propertyName==="transform")cleanup(); };
+  inEl.addEventListener("transitionend",onEnd);
+  const to=setTimeout(cleanup,DUR+150);          // rete di sicurezza se transitionend non scatta
+  animCleanup=()=>{ clearTimeout(to); cleanup(); };
+}
 const FAB_CFG={
   oggi:{show:true,label:"＋"},
   abitudini:{show:true,label:"＋"},
@@ -1447,7 +1494,7 @@ document.getElementById("journalBody").addEventListener("click",e=>{
 const CHANGELOG = [
   {v:"1.2.0", title:"Novità di questa versione", items:[
     {e:"📅", t:"Esporta nel calendario", d:"Da Impostazioni → «Calendario (.ics)» esporti abitudini, task e appuntamenti in un file da importare in Google Calendar, Apple o Outlook. Le abitudini diventano eventi ricorrenti."},
-    {e:"👆", t:"Cambia pagina con lo swipe", d:"Scorri orizzontalmente per passare da una scheda all'altra: verso sinistra vai avanti (Oggi → Abitudini), verso destra torni indietro."},
+    {e:"👆", t:"Cambia pagina con lo swipe", d:"Scorri orizzontalmente per passare da una scheda all'altra, con animazione di scorrimento: verso sinistra vai avanti (Oggi → Abitudini), verso destra torni indietro."},
   ]},
   {v:"1.1.0", title:"Novità di questa versione", items:[
     {e:"🔢", t:"Contatore giornaliero", d:"Ora puoi spuntare un'abitudine più volte al giorno (es. lavarsi i denti). Imposta «Volte al giorno» quando crei o modifichi un'abitudine."},
